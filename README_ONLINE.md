@@ -1,6 +1,10 @@
-# Keliton Ateliê 2.1 — pacote para publicação online
+# Keliton Ateliê 2.1 — login Google/Facebook corrigido para publicação online
 
 Este pacote foi preparado para rodar como **aplicação Node.js com HTTPS**. A interface do site foi preservada.
+
+## Correção desta versão
+
+O problema visto no GitHub Pages ocorre porque o login real depende do `server.js`. GitHub Pages não executa Node.js. Esta versão está organizada para uma hospedagem Node.js, mantendo a interface do site e o fluxo OAuth.
 
 ## O que foi preparado
 
