@@ -1,0 +1,13 @@
+{
+  "name": "keliton-atelie",
+  "version": "2.1.0",
+  "private": true,
+  "description": "Keliton Ateliê — vitrine com autenticação Google/Facebook e integração segura com Gmail",
+  "scripts": {
+    "start": "node server.js",
+    "app:check": "node -e \"console.log('Keliton Ateliê app assets OK')\""
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

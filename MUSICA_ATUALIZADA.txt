@@ -1,0 +1,11 @@
+ATUALIZAÇÃO — SEGURANÇA DO ADMINISTRADOR
+
+- Removido o antigo código fixo do administrador.
+- Entrada agora oferece:
+  1) reconhecimento facial/biometria do dispositivo;
+  2) senha escrita.
+- Até 2 pessoas podem cadastrar uma credencial biométrica.
+- Em Android, o sistema biométrico disponível no aparelho pode ser reconhecimento facial, impressão digital ou outro método seguro.
+- A senha inicial desta demo é: tomdiversos
+- Dentro de Segurança de acesso, o administrador pode trocar a senha e remover credenciais biométricas.
+- O reconhecimento biométrico depende de HTTPS ou localhost e do suporte do navegador/dispositivo.
