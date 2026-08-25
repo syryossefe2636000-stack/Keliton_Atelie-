@@ -1,5 +1,0 @@
-ENCRYPTION_KEY_HEX deve ter 64 caracteres hexadecimais.
-Exemplo de como gerar uma chave forte no computador:
-  node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-
-No celular, você pode gerar uma chave aleatória de 64 caracteres em um gerador confiável e colar SOMENTE no campo secreto da hospedagem. Nunca coloque essa chave no index.html, no GitHub ou no ZIP público.
