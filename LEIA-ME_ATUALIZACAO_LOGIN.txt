@@ -1,5 +1,0 @@
-KELITON ATELIÊ — ATUALIZAÇÃO LOGIN/PERFIL
-
-Adicionada a interface de Perfil do Cliente com Google, Facebook e e-mail.
-
-Os botões Google/Facebook estão preparados visualmente, mas a autenticação real exige credenciais OAuth e backend. Nenhuma credencial foi inventada. A biometria do administrador continua baseada na estrutura WebAuthn desta versão.
