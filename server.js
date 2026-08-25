@@ -14,6 +14,88 @@ const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 const OAUTH_STATES = new Map();
 
+const WEBAUTHN_FILE = path.join(DATA_DIR, 'webauthn.json');
+const WEBAUTHN_CHALLENGES_FILE = path.join(DATA_DIR, 'webauthn_challenges.json');
+if (!fs.existsSync(WEBAUTHN_FILE)) fs.writeFileSync(WEBAUTHN_FILE, '[]');
+if (!fs.existsSync(WEBAUTHN_CHALLENGES_FILE)) fs.writeFileSync(WEBAUTHN_CHALLENGES_FILE, '{}');
+function readWebAuthn(){return readJson(WEBAUTHN_FILE,[])}
+function writeWebAuthn(v){writeJson(WEBAUTHN_FILE,v)}
+function readWebAuthnChallenges(){return readJson(WEBAUTHN_CHALLENGES_FILE,{})}
+function writeWebAuthnChallenges(v){writeJson(WEBAUTHN_CHALLENGES_FILE,v)}
+function b64urlBuf(v){return Buffer.from(v).toString('base64url')}
+function bufB64url(v){return Buffer.from(String(v||''),'base64url')}
+function requestOrigin(req){
+  const proto=String(req.headers['x-forwarded-proto']||'').split(',')[0].trim() || (process.env.NODE_ENV==='production'?'https':(req.socket.encrypted?'https':'http'));
+  const host=req.headers['x-forwarded-host']||req.headers.host||`localhost:${PORT}`;
+  return `${proto}://${host}`;
+}
+function rpIdFor(req){return new URL(process.env.PUBLIC_BASE_URL||requestOrigin(req)).hostname}
+function webauthnChallenge(sessionToken){return hashToken(sessionToken||'anonymous')}
+function setWebAuthnChallenge(req,kind,value){const token=cookies(req).ka_session; if(!token)throw new Error('unauthorized');const all=readWebAuthnChallenges();all[webauthnChallenge(token)]={kind,challenge:value,expiresAt:Date.now()+5*60*1000};writeWebAuthnChallenges(all)}
+function takeWebAuthnChallenge(req,kind){const token=cookies(req).ka_session;if(!token)return null;const all=readWebAuthnChallenges(),key=webauthnChallenge(token),x=all[key];if(!x||x.kind!==kind||x.expiresAt<Date.now()){if(x){delete all[key];writeWebAuthnChallenges(all)}return null}delete all[key];writeWebAuthnChallenges(all);return x.challenge}
+function sha256(v){return crypto.createHash('sha256').update(v).digest()}
+function derLen(n){if(n<128)return Buffer.from([n]);const a=[];while(n){a.unshift(n&255);n>>=8}return Buffer.from([0x80|a.length,...a])}
+function der(type,body){return Buffer.concat([Buffer.from([type]),derLen(body.length),body])}
+function derInt(buf){let b=Buffer.from(buf);while(b.length>1&&b[0]===0)b=b.slice(1);if(b[0]&0x80)b=Buffer.concat([Buffer.from([0]),b]);return der(0x02,b)}
+function coseToSpki(cose){
+  const alg=cose.get(3), kty=cose.get(1);
+  if(kty===2 && alg===-7){
+    const x=Buffer.from(cose.get(-2)), y=Buffer.from(cose.get(-3));
+    if(x.length!==32||y.length!==32)throw new Error('invalid ec key');
+    const algId=Buffer.from('301306072a8648ce3d020106082a8648ce3d030107','hex');
+    return der(0x30,Buffer.concat([algId,der(0x03,Buffer.concat([Buffer.from([0]),Buffer.from([4]),x,y]))]));
+  }
+  if(kty===3 && alg===-257){
+    const n=Buffer.from(cose.get(-1)), e=Buffer.from(cose.get(-2));
+    const rsa=der(0x30,Buffer.concat([derInt(n),derInt(e)]));
+    const algId=Buffer.from('300d06092a864886f70d0101010500','hex');
+    return der(0x30,Buffer.concat([algId,der(0x03,Buffer.concat([Buffer.from([0]),rsa]))]));
+  }
+  throw new Error(`unsupported cose key kty=${kty} alg=${alg}`);
+}
+function cborDecode(buf){
+  let o=0;
+  function readLen(ai){
+    if(ai<24)return ai;
+    if(ai===24)return buf[o++];
+    if(ai===25){const n=buf.readUInt16BE(o);o+=2;return n}
+    if(ai===26){const n=buf.readUInt32BE(o);o+=4;return n}
+    if(ai===27){const n=Number(buf.readBigUInt64BE(o));o+=8;return n}
+    if(ai===31)throw new Error('indefinite cbor unsupported');
+    throw new Error('bad cbor length');
+  }
+  function val(){
+    const ib=buf[o++], mt=ib>>5, ai=ib&31;
+    if(mt===0)return readLen(ai);
+    if(mt===1)return -1-readLen(ai);
+    if(mt===2){const n=readLen(ai),v=buf.slice(o,o+n);o+=n;return v}
+    if(mt===3){const n=readLen(ai),v=buf.slice(o,o+n).toString('utf8');o+=n;return v}
+    if(mt===4){const n=readLen(ai),a=[];for(let i=0;i<n;i++)a.push(val());return a}
+    if(mt===5){const n=readLen(ai),m=new Map();for(let i=0;i<n;i++)m.set(val(),val());return m}
+    if(mt===7){if(ai===20)return false;if(ai===21)return true;if(ai===22)return null;if(ai===23)return undefined;if(ai===25){const h=buf.readUInt16BE(o);o+=2;return h}if(ai===26){const f=buf.readFloatBE(o);o+=4;return f}if(ai===27){const f=buf.readDoubleBE(o);o+=8;return f}}
+    throw new Error('unsupported cbor type');
+  }
+  return val();
+}
+function parseAttestationObject(attestationObject){
+  const obj=cborDecode(attestationObject),auth=Buffer.from(obj.get('authData'));let p=0;
+  if(auth.length<37)throw new Error('invalid authData');
+  const rpIdHash=auth.slice(p,p+32);p+=32;const flags=auth[p++];const signCount=auth.readUInt32BE(p);p+=4;
+  if(!(flags&0x40))throw new Error('credential data missing');
+  p+=16;const credLen=auth.readUInt16BE(p);p+=2;const credentialId=auth.slice(p,p+credLen);p+=credLen;
+  const cose=cborDecode(auth.slice(p));
+  return {rpIdHash,flags,signCount,credentialId,spki:coseToSpki(cose),alg:cose.get(3)};
+}
+function parseAuthenticatorData(data){const b=Buffer.from(data);if(b.length<37)throw new Error('invalid authenticatorData');return {rpIdHash:b.slice(0,32),flags:b[32],signCount:b.readUInt32BE(33)}}
+function parseClientData(data){try{return JSON.parse(Buffer.from(data).toString('utf8'))}catch{throw new Error('invalid clientDataJSON')}}
+function expectedOrigin(req){return process.env.PUBLIC_BASE_URL ? new URL(process.env.PUBLIC_BASE_URL).origin : requestOrigin(req)}
+function verifyClientData(data,expectedType,challenge,origin){const c=parseClientData(data);if(c.type!==expectedType)throw new Error('invalid clientData type');if(c.challenge!==challenge)throw new Error('challenge mismatch');if(c.origin!==origin)throw new Error('origin mismatch');return c}
+function adminCredentials(){return readWebAuthn()}
+function adminCredentialLimit(){return 2}
+function ensureAdminSession(req,res){const s=requireSession(req,res);if(!s)return null;if(s.role!=='admin'){json(res,403,{error:'admin_only'});return null}return s}
+function hashAdminPasswordServer(value){return crypto.createHash('sha256').update(String(value)).digest('hex')}
+function serverAdminPasswordHash(){return process.env.ADMIN_PASSWORD_HASH||'ff30ccef8c82e013a5da02170ac6811e5da71574266b4563817b3717c9c8f46b'}
+
 fs.mkdirSync(MUSIC_DIR, {recursive:true});
 if (!fs.existsSync(STATE_FILE)) fs.writeFileSync(STATE_FILE, JSON.stringify({products:null,music:Array(6).fill(null),active:-1,seller:{name:'Keliton Ateliê',whatsapp:''},gmail:{connected:false,email:''}}, null, 2));
 if (!fs.existsSync(USERS_FILE)) fs.writeFileSync(USERS_FILE, '[]');
@@ -63,7 +145,7 @@ const server=http.createServer(async (req,res)=>{
   const u=new URL(req.url,`http://${req.headers.host||'localhost'}`);
   if(req.method==='OPTIONS'){res.writeHead(204,{'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'Content-Type,X-Filename','Access-Control-Allow-Methods':'GET,POST,OPTIONS'});return res.end()}
   try{
-    if(u.pathname==='/health'&&req.method==='GET')return json(res,200,{ok:true,service:'keliton-atelie',version:'2.1.0'});
+    if(u.pathname==='/health'&&req.method==='GET')return json(res,200,{ok:true,service:'keliton-atelie',version:'2.2.0'});
     if(u.pathname==='/auth/google'&&req.method==='GET')return beginOAuth(req,res,u.searchParams.get('purpose')==='gmail'?'gmail':'login','google');
     if(u.pathname==='/auth/facebook'&&req.method==='GET')return beginOAuth(req,res,'login','facebook');
     if(u.pathname==='/auth/google/callback'&&req.method==='GET')return googleCallback(req,res);
@@ -72,6 +154,56 @@ const server=http.createServer(async (req,res)=>{
     if(u.pathname==='/api/auth/logout'&&req.method==='POST'){const token=cookies(req).ka_session;if(token){const sessions=readSessions();delete sessions[hashToken(token)];writeSessions(sessions)}clearCookie(res,'ka_session');return json(res,200,{ok:true})}
     if(u.pathname==='/api/gmail/status'&&req.method==='GET'){const admin=requireSession(req,res);if(!admin)return;if(admin.role!=='admin')return json(res,403,{error:'admin_only'});const g=readState().gmail||{};return json(res,200,{connected:!!g.connected,email:g.email||''})}
     if(u.pathname==='/api/admin/session'&&req.method==='GET'){const s=requireSession(req,res);if(!s)return;if(s.role!=='admin')return json(res,403,{error:'admin_only'});return json(res,200,{ok:true,email:s.email,name:s.name})}
+
+    if(u.pathname==='/api/admin/unlock'&&req.method==='POST'){
+      const body=JSON.parse((await readBody(req)).toString('utf8')||'{}');
+      if(hashAdminPasswordServer(body.password||'')!==serverAdminPasswordHash())return json(res,401,{error:'invalid_password'});
+      const email=process.env.ADMIN_EMAIL||'admin@keliton.local';
+      const users=readUsers();let user=users.find(x=>x.email&&x.email.toLowerCase()===email.toLowerCase());
+      if(!user){user={id:'admin-local',provider:'local',providerId:'admin-local',name:'Keliton Ateliê',email,photo:'',role:'admin',createdAt:new Date().toISOString()};users.push(user);writeUsers(users)}else if(user.role!=='admin'){user.role='admin';writeUsers(users)}
+      const token=createSession(user);setCookie(res,'ka_session',token);return json(res,200,{ok:true,email:user.email,name:user.name,role:'admin'});
+    }
+    if(u.pathname==='/api/admin/webauthn/list'&&req.method==='GET'){
+      const admin=ensureAdminSession(req,res);if(!admin)return;
+      return json(res,200,{credentials:adminCredentials().filter(x=>x.userId===admin.userId).map(x=>({id:x.credentialId,name:x.name,createdAt:x.createdAt}))});
+    }
+    if(u.pathname==='/api/admin/webauthn/register/options'&&req.method==='POST'){
+      const admin=ensureAdminSession(req,res);if(!admin)return;
+      const creds=adminCredentials().filter(x=>x.userId===admin.userId);if(creds.length>=adminCredentialLimit())return json(res,409,{error:'limit_reached'});
+      const challenge=b64urlBuf(crypto.randomBytes(32));setWebAuthnChallenge(req,'register',challenge);
+      const userId=crypto.randomBytes(16);
+      return json(res,200,{challenge,rp:{name:'Keliton Ateliê',id:rpIdFor(req)},user:{id:b64urlBuf(userId),name:admin.email||'administrador',displayName:admin.name||'Administrador'},pubKeyCredParams:[{type:'public-key',alg:-7},{type:'public-key',alg:-257}],authenticatorSelection:{residentKey:'preferred',userVerification:'required'},timeout:60000,attestation:'none'});
+    }
+    if(u.pathname==='/api/admin/webauthn/register/verify'&&req.method==='POST'){
+      const admin=ensureAdminSession(req,res);if(!admin)return;
+      const challenge=takeWebAuthnChallenge(req,'register');if(!challenge)return json(res,400,{error:'challenge_expired'});
+      const body=JSON.parse((await readBody(req)).toString('utf8')||'{}');
+      try{
+        const clientData=bufB64url(body.response?.clientDataJSON);const attObj=bufB64url(body.response?.attestationObject);
+        verifyClientData(clientData,'webauthn.create',challenge,expectedOrigin(req));
+        const parsed=parseAttestationObject(attObj);if(!parsed.rpIdHash.equals(sha256(rpIdFor(req))))throw new Error('rpId mismatch');if(!(parsed.flags&0x01)||!(parsed.flags&0x04))throw new Error('user verification required');
+        const creds=adminCredentials();if(creds.some(x=>x.credentialId===b64urlBuf(parsed.credentialId)))throw new Error('credential already registered');
+        creds.push({userId:admin.userId,credentialId:b64urlBuf(parsed.credentialId),publicKeySpki:b64urlBuf(parsed.spki),alg:parsed.alg,signCount:parsed.signCount,name:String(body.name||'Administrador').slice(0,80),createdAt:new Date().toISOString()});writeWebAuthn(creds);
+        return json(res,200,{ok:true,credentialId:b64urlBuf(parsed.credentialId),name:String(body.name||'Administrador').slice(0,80)});
+      }catch(e){return json(res,400,{error:'registration_failed',message:e.message})}
+    }
+    if(u.pathname==='/api/admin/webauthn/auth/options'&&req.method==='POST'){
+      const challenge=b64urlBuf(crypto.randomBytes(32)),flowId=randomToken(18);const all=readWebAuthnChallenges();all['auth:'+flowId]={kind:'auth',challenge,expiresAt:Date.now()+5*60*1000};writeWebAuthnChallenges(all);
+      const creds=adminCredentials();
+      return json(res,200,{flowId,challenge,rpId:rpIdFor(req),allowCredentials:creds.map(x=>({type:'public-key',id:x.credentialId})),userVerification:'required',timeout:60000});
+    }
+    if(u.pathname==='/api/admin/webauthn/auth/verify'&&req.method==='POST'){
+      const body=JSON.parse((await readBody(req)).toString('utf8')||'{}');const flowId=String(body.flowId||'');const all=readWebAuthnChallenges(),entry=all['auth:'+flowId];if(!entry||entry.expiresAt<Date.now()){if(entry){delete all['auth:'+flowId];writeWebAuthnChallenges(all)}return json(res,400,{error:'challenge_expired'})}delete all['auth:'+flowId];writeWebAuthnChallenges(all);const challenge=entry.challenge;
+      try{
+        const credId=String(body.rawId||body.id||'');const stored=adminCredentials().find(x=>x.credentialId===credId);if(!stored)return json(res,401,{error:'unknown_credential'});
+        const clientData=bufB64url(body.response?.clientDataJSON),authData=bufB64url(body.response?.authenticatorData),signature=bufB64url(body.response?.signature);
+        verifyClientData(clientData,'webauthn.get',challenge,expectedOrigin(req));
+        const parsed=parseAuthenticatorData(authData);if(!parsed.rpIdHash.equals(sha256(rpIdFor(req))))throw new Error('rpId mismatch');if(!(parsed.flags&0x01)||!(parsed.flags&0x04))throw new Error('user verification required');
+        const verifyData=Buffer.concat([authData,sha256(clientData)]);const ok=crypto.verify('sha256',verifyData,{key:Buffer.from(stored.publicKeySpki,'base64url'),dsaEncoding:'der'},signature);if(!ok)throw new Error('invalid signature');
+        if(stored.signCount!==0&&parsed.signCount!==0&&parsed.signCount<=stored.signCount)throw new Error('sign counter invalid');stored.signCount=parsed.signCount;writeWebAuthn(adminCredentials());
+        const users=readUsers();const user=users.find(x=>x.id===stored.userId);if(!user||user.role!=='admin')return json(res,403,{error:'admin_only'});const token=createSession(user);setCookie(res,'ka_session',token);return json(res,200,{ok:true,name:stored.name,email:user.email});
+      }catch(e){return json(res,401,{error:'authentication_failed',message:e.message})}
+    }
     if(u.pathname==='/api/admin/gmail/messages'&&req.method==='GET'){const admin=requireSession(req,res);if(!admin)return;if(admin.role!=='admin')return json(res,403,{error:'admin_only'});const g=readState().gmail||{};if(!g.connected)return json(res,409,{error:'gmail_not_connected'});const access=await gmailAccessToken();const list=await httpsRequest(`https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=20&labelIds=INBOX`,'GET',null,{Authorization:`Bearer ${access}`});if(list.status!==200)return json(res,502,{error:'gmail_list_failed',detail:list.data});const msgs=[];for(const m of (list.data.messages||[]).slice(0,20)){const one=await httpsRequest(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`,'GET',null,{Authorization:`Bearer ${access}`});if(one.status===200){const headers=Object.fromEntries((one.data.payload?.headers||[]).map(h=>[h.name.toLowerCase(),h.value]));msgs.push({id:m.id,threadId:m.threadId,from:headers.from||'',to:headers.to||'',subject:headers.subject||'(sem assunto)',date:headers.date||'',snippet:one.data.snippet||''})}}return json(res,200,{email:g.email,messages:msgs})}
     if(u.pathname==='/api/state'&&req.method==='GET'){const s=readState();if(s.gmail&&s.gmail.refreshToken){s.gmail={connected:!!s.gmail.connected,email:s.gmail.email||'',connectedAt:s.gmail.connectedAt||''}}return json(res,200,s)}
     if(u.pathname==='/api/seller'&&req.method==='GET') return json(res,200,readState().seller||{name:'Keliton Ateliê',whatsapp:''});

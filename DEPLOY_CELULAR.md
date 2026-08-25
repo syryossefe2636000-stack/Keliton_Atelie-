@@ -4,7 +4,7 @@
 Esta versão precisa de um servidor Node.js. GitHub Pages hospeda arquivos estáticos e não executa `server.js`. Por isso, NÃO use GitHub Pages para esta versão se quiser login Google/Facebook real.
 
 O pacote já contém:
-- `server.js` com OAuth Google/Facebook e sessões por cookie;
+- `server.js` com OAuth Google/Facebook, sessões por cookie e WebAuthn/passkey para biometria do administrador;
 - `index.html` preservando a interface;
 - `Procfile` e `render.yaml` para hospedagem Node;
 - `/health` para teste do servidor;
@@ -51,3 +51,10 @@ O navegador será enviado ao provedor, depois voltará para `/auth/.../callback`
 - Não coloque `GOOGLE_CLIENT_SECRET`, `FACEBOOK_APP_SECRET` ou `ENCRYPTION_KEY_HEX` dentro do `index.html`.
 - Não publique um `.env` real no GitHub.
 - Não tente executar `server.js` pelo GitHub Pages.
+
+## Biometria do administrador
+A opção `Cadastrar facial para acesso ao administrador` usa WebAuthn/passkeys. O site não recebe nem salva a imagem do rosto: o aparelho faz a verificação local e o servidor guarda apenas a credencial criptográfica necessária para validar o acesso. O navegador precisa estar em HTTPS. O servidor permite até 2 credenciais administrativas.
+
+Para o primeiro cadastro, entre no administrador com a sessão do servidor (Google autorizado ou senha administrativa). Depois toque em `Segurança de acesso` → `Cadastrar facial para acesso ao administrador`.
+
+Para a senha administrativa usada no servidor, configure `ADMIN_PASSWORD_HASH` com o SHA-256 da senha escolhida.

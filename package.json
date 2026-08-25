@@ -1,6 +1,6 @@
 {
   "name": "keliton-atelie",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "private": true,
   "description": "Keliton Ateliê — vitrine com autenticação Google/Facebook e integração segura com Gmail",
   "scripts": {
