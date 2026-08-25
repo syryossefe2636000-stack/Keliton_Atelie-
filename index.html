@@ -70,7 +70,7 @@ async function loadAdminBiometrics(){
 }
 async function registerAdminBiometric(){
   if(!biometricSupported()){toast('Reconhecimento facial/biometria precisa de HTTPS neste navegador.');return}
-  if(!REMOTE_API){toast('Para cadastrar com segurança, publique o site com o servidor HTTPS do Keliton Ateliê.');return}
+  if(!REMOTE_API){toast('O cadastro facial seguro precisa do backend do Keliton Ateliê conectado.');return}
   await loadAdminBiometrics();
   if(adminBiometrics.length>=2){toast('Limite de 2 pessoas já atingido.');return}
   const name=prompt('Nome da pessoa para este reconhecimento:');if(!name)return;
@@ -91,7 +91,7 @@ async function registerAdminBiometric(){
 }
 async function loginAdminBiometric(){
   if(!biometricSupported()){toast('Reconhecimento facial/biometria precisa de HTTPS neste navegador.');return}
-  if(!REMOTE_API){toast('A autenticação facial segura precisa do servidor HTTPS do Keliton Ateliê.');return}
+  if(!REMOTE_API){toast('O acesso facial seguro será ativado quando o backend do Keliton Ateliê estiver conectado.');return}
   try{
     const optRes=await fetch(REMOTE_API+'/admin/webauthn/auth/options',{method:'POST',credentials:'include'});const options=await optRes.json();if(!optRes.ok)throw new Error(options.error||'options_failed');
     const publicKey={...options,challenge:fromB64url(options.challenge),allowCredentials:(options.allowCredentials||[]).map(x=>({...x,id:fromB64url(x.id)}))};
@@ -161,7 +161,9 @@ let notifications=JSON.parse(localStorage.getItem('ka_notifications')||'[]');
 let reviews=JSON.parse(localStorage.getItem('ka_reviews')||'[]');
 let modalHistory=[];
 // Persistência remota opcional: a interface permanece igual.
-const REMOTE_API=(location.protocol==='http:'||location.protocol==='https:') ? '/api' : '';
+// Backend: no GitHub Pages não existe /api. Só usa a API quando o site está sendo servido pelo backend Node.
+const KA_BACKEND_SAME_ORIGIN = !(location.hostname.endsWith('.github.io') || location.hostname === 'github.io');
+const REMOTE_API = (location.protocol==='http:'||location.protocol==='https:') && KA_BACKEND_SAME_ORIGIN ? '/api' : '';
 let remoteReady=false;
 async function remoteRequest(path,options={}){if(!REMOTE_API)return null;try{let r=await fetch(REMOTE_API+path,options);if(!r.ok)throw new Error('HTTP '+r.status);return await r.json()}catch(e){return null}}
 async function syncRemote(){if(!REMOTE_API)return;let data=await remoteRequest('/state');if(!data)return;remoteReady=true;if(Array.isArray(data.products)){products=data.products;localStorage.setItem('ka_products',JSON.stringify(products));render()}if(data.seller){seller=data.seller;localStorage.setItem('ka_seller',JSON.stringify(seller))}if(Array.isArray(data.music))restoreRemoteMusic(data.music)}
