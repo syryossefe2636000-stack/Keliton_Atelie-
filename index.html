@@ -106,7 +106,9 @@ async function loginAdminBiometric(){
 }
 async function loginAdmin(){
   const value=document.querySelector('#adminPass')?.value||'';
-  if(REMOTE_API){
+  // GitHub Pages must use the local fallback until the Node backend is connected.
+  // Never call /api from a *.github.io page.
+  if(REMOTE_API && !KA_IS_GITHUB_PAGES){
     try{const r=await fetch(REMOTE_API+'/admin/unlock',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:value})});const d=await r.json();if(!r.ok)throw new Error('Senha incorreta.');toast('Administrador autenticado.');adminPanel(true);return}catch(e){toast(e.message||'Não foi possível autenticar.');return}
   }
   await ensureAdminPassword();const hash=await hashAdminPassword(value);if(hash===adminPassHash)adminPanel(true);else toast('Senha incorreta.');
@@ -162,8 +164,9 @@ let reviews=JSON.parse(localStorage.getItem('ka_reviews')||'[]');
 let modalHistory=[];
 // Persistência remota opcional: a interface permanece igual.
 // Backend: no GitHub Pages não existe /api. Só usa a API quando o site está sendo servido pelo backend Node.
-const KA_BACKEND_SAME_ORIGIN = !(location.hostname.endsWith('.github.io') || location.hostname === 'github.io');
-const REMOTE_API = (location.protocol==='http:'||location.protocol==='https:') && KA_BACKEND_SAME_ORIGIN ? '/api' : '';
+const KA_IS_GITHUB_PAGES = /(^|\\.)github\\.io$/i.test(location.hostname);
+const KA_BACKEND_SAME_ORIGIN = !KA_IS_GITHUB_PAGES && (location.protocol==='http:'||location.protocol==='https:');
+const REMOTE_API = KA_BACKEND_SAME_ORIGIN ? '/api' : '';
 let remoteReady=false;
 async function remoteRequest(path,options={}){if(!REMOTE_API)return null;try{let r=await fetch(REMOTE_API+path,options);if(!r.ok)throw new Error('HTTP '+r.status);return await r.json()}catch(e){return null}}
 async function syncRemote(){if(!REMOTE_API)return;let data=await remoteRequest('/state');if(!data)return;remoteReady=true;if(Array.isArray(data.products)){products=data.products;localStorage.setItem('ka_products',JSON.stringify(products));render()}if(data.seller){seller=data.seller;localStorage.setItem('ka_seller',JSON.stringify(seller))}if(Array.isArray(data.music))restoreRemoteMusic(data.music)}
@@ -373,7 +376,22 @@ refreshAuth().then(u=>{if(u){profile={...profile,...u};render()}const q=new URLS
 </script>
 
 
-<script>if("serviceWorker" in navigator){window.addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));}</script>
+<script>
+/* GitHub Pages is static. Remove any stale service worker from older builds so it
+   cannot serve an old login script that still calls /api and parses HTML as JSON. */
+if ("serviceWorker" in navigator && /(^|\\.)github\\.io$/i.test(location.hostname)) {
+  window.addEventListener("load", async () => {
+    try {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(regs.map(r => r.unregister()));
+      if ("caches" in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      }
+    } catch (_) {}
+  });
+}
+</script>
 <style>
 #ka-client-auth-overlay{position:fixed;inset:0;background:rgba(0,0,0,.58);display:none;align-items:center;justify-content:center;z-index:99999;padding:18px}
 #ka-client-auth{width:min(430px,94vw);background:#173c2b;color:#fff;border-radius:18px;padding:22px;box-shadow:0 18px 55px rgba(0,0,0,.4);font-family:inherit}
