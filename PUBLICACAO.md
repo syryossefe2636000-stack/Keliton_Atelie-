@@ -30,10 +30,8 @@ Configure no serviço de hospedagem:
 
 Facebook é opcional (`FACEBOOK_APP_ID` e `FACEBOOK_APP_SECRET`).
 
-### Senha administrativa da versão atual
-A versão de demonstração mantém a senha inicial já existente no projeto: `tomdiversos`.
-
-**Antes de colocar o site em produção, troque essa senha** configurando `ADMIN_PASSWORD_HASH` no serviço de hospedagem.
+### Senha administrativa
+Não existe mais senha administrativa padrão embutida no código. Em produção, `ADMIN_PASSWORD_HASH` é obrigatório e deve ser configurado como SHA-256 da sua senha. O servidor recusa iniciar em produção se os segredos obrigatórios estiverem ausentes ou inválidos.
 
 ### Biometria
 Depois de entrar no administrador pelo menos uma vez, use `Segurança de acesso` → `Cadastrar facial para acesso ao administrador`. A biometria exige HTTPS e o backend Node ativo.
@@ -42,3 +40,14 @@ Depois de entrar no administrador pelo menos uma vez, use `Segurança de acesso`
 A configuração do Firebase Web não substitui o backend OAuth deste projeto. O login Google do servidor usa `GOOGLE_CLIENT_ID` e `GOOGLE_CLIENT_SECRET`, com o callback `/auth/google/callback` configurado no Google Cloud.
 
 Não publique `.env`, senhas, client secrets ou chaves privadas.
+
+
+### Reforços de segurança desta versão
+- Removida a senha administrativa padrão embutida no `server.js`.
+- Bloqueio de inicialização em produção quando `ADMIN_EMAIL`, `ADMIN_PASSWORD_HASH` ou `ENCRYPTION_KEY_HEX` não estiverem configurados corretamente.
+- Limite de tentativas no desbloqueio administrativo.
+- Verificação de origem nas operações que alteram dados.
+- Rotas de produtos, vendedor, música e ativação de música agora exigem sessão administrativa.
+- Limite de tamanho para payloads de produtos, dados do vendedor e uploads de música.
+- Cabeçalhos de segurança HTTP adicionados.
+- Segredos continuam exclusivamente nas variáveis de ambiente.

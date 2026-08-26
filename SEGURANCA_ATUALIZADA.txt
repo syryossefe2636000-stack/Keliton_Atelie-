@@ -1,0 +1,14 @@
+VERSÃO PROTEGIDA — KELITON ATELIÊ
+
+Alterações aplicadas ao backend:
+- removida senha administrativa padrão embutida no código;
+- ADMIN_PASSWORD_HASH, ADMIN_EMAIL e ENCRYPTION_KEY_HEX são obrigatórios em produção;
+- limite de tentativas no desbloqueio do administrador;
+- verificação de Origin nas operações de alteração;
+- produtos, vendedor, música e ativação de música exigem sessão de administrador;
+- limites de tamanho para payloads;
+- cabeçalhos HTTP de segurança;
+- arquivos do servidor, dados privados e arquivos de configuração não são servidos publicamente;
+- WebAuthn continua exigindo HTTPS e backend Node ativo.
+
+A interface do site não foi redesenhada.

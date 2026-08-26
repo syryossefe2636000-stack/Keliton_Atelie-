@@ -98,7 +98,38 @@ function adminCredentials(){return readWebAuthn()}
 function adminCredentialLimit(){return 2}
 function ensureAdminSession(req,res){const s=requireSession(req,res);if(!s)return null;if(s.role!=='admin'){json(res,403,{error:'admin_only'});return null}return s}
 function hashAdminPasswordServer(value){return crypto.createHash('sha256').update(String(value)).digest('hex')}
-function serverAdminPasswordHash(){return process.env.ADMIN_PASSWORD_HASH||'ff30ccef8c82e013a5da02170ac6811e5da71574266b4563817b3717c9c8f46b'}
+function serverAdminPasswordHash(){return String(process.env.ADMIN_PASSWORD_HASH||'').trim().toLowerCase()}
+function assertProductionSecrets(){
+  if(process.env.NODE_ENV==='production'){
+    const required=['ADMIN_EMAIL','ADMIN_PASSWORD_HASH','ENCRYPTION_KEY_HEX'];
+    const missing=required.filter(k=>!String(process.env[k]||'').trim());
+    if(missing.length) throw new Error(`Missing production secrets: ${missing.join(', ')}`);
+    if(!/^[a-f0-9]{64}$/i.test(process.env.ADMIN_PASSWORD_HASH)) throw new Error('ADMIN_PASSWORD_HASH must be a 64-character SHA-256 hex string');
+    if(!/^[a-f0-9]{64}$/i.test(process.env.ENCRYPTION_KEY_HEX)) throw new Error('ENCRYPTION_KEY_HEX must be a 64-character hex string');
+  }
+}
+const LOGIN_LIMIT=8, LOGIN_WINDOW=15*60*1000;
+const loginAttempts=new Map();
+function clientIp(req){return String(req.headers['x-forwarded-for']||req.socket.remoteAddress||'unknown').split(',')[0].trim()}
+function rateLimit(key,limit=LOGIN_LIMIT,windowMs=LOGIN_WINDOW){
+  const now=Date.now(), x=loginAttempts.get(key);
+  if(!x||now-x.startedAt>windowMs){loginAttempts.set(key,{startedAt:now,count:1});return true}
+  x.count++;
+  return x.count<=limit;
+}
+function sameOrigin(req){
+  const origin=req.headers.origin;
+  if(!origin)return true;
+  try{return new URL(origin).origin===new URL(expectedOrigin(req)).origin}catch{return false}
+}
+function requireSameOrigin(req,res){
+  if(!sameOrigin(req)){json(res,403,{error:'origin_forbidden'});return false}
+  return true;
+}
+function requireAdminPost(req,res){
+  if(!requireSameOrigin(req,res))return null;
+  return ensureAdminSession(req,res);
+}
 
 fs.mkdirSync(MUSIC_DIR, {recursive:true});
 if (!fs.existsSync(STATE_FILE)) fs.writeFileSync(STATE_FILE, JSON.stringify({products:null,music:Array(6).fill(null),active:-1,seller:{name:'Keliton Ateliê',whatsapp:'',pixKey:'',pixUrl:''},gmail:{connected:false,email:''}}, null, 2));
@@ -115,7 +146,20 @@ function readSessions(){return readJson(SESSIONS_FILE,{})}
 function writeSessions(v){writeJson(SESSIONS_FILE,v)}
 function mimeFor(ext){return ({'.mp3':'audio/mpeg','.wav':'audio/wav','.ogg':'audio/ogg','.m4a':'audio/mp4','.aac':'audio/aac','.webm':'audio/webm'})[ext.toLowerCase()]||'application/octet-stream'}
 function safeName(name){return String(name||'musica').replace(/[^a-zA-Z0-9._-]/g,'_').slice(0,120)}
-function send(res,status,type,body,extra={}){res.writeHead(status,{'Content-Type':type,'Cache-Control':'no-store','Access-Control-Allow-Origin':'*',...extra});res.end(body)}
+function send(res,status,type,body,extra={}){
+  const headers={
+    'Content-Type':type,
+    'Cache-Control':'no-store',
+    'X-Content-Type-Options':'nosniff',
+    'X-Frame-Options':'DENY',
+    'Referrer-Policy':'strict-origin-when-cross-origin',
+    'Permissions-Policy':'camera=(self), microphone=(self), geolocation=(self), payment=(self)',
+    'Content-Security-Policy':"default-src 'self' https://accounts.google.com https://www.facebook.com https://graph.facebook.com https://www.gstatic.com; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.gstatic.com https://accounts.google.com; connect-src 'self' https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com https://www.facebook.com",
+    ...extra
+  };
+  if(process.env.NODE_ENV==='production')headers['Strict-Transport-Security']='max-age=31536000; includeSubDomains';
+  res.writeHead(status,headers);res.end(body)
+}
 function json(res,status,obj,extra={}){send(res,status,'application/json; charset=utf-8',JSON.stringify(obj),extra)}
 function readBody(req){return new Promise((resolve,reject)=>{const chunks=[];req.on('data',c=>chunks.push(c));req.on('end',()=>resolve(Buffer.concat(chunks)));req.on('error',reject)})}
 function randomToken(bytes=32){return crypto.randomBytes(bytes).toString('hex')}
@@ -155,7 +199,7 @@ const server=http.createServer(async (req,res)=>{
     if(u.pathname==='/auth/google/callback'&&req.method==='GET')return googleCallback(req,res);
     if(u.pathname==='/auth/facebook/callback'&&req.method==='GET')return facebookCallback(req,res);
     if(u.pathname==='/api/auth/me'&&req.method==='GET'){const s=requireSession(req,res);if(!s)return;return json(res,200,{authenticated:true,user:readUsers().find(x=>x.id===s.userId)||{id:s.userId,email:s.email,name:s.name,role:s.role}})}
-    if(u.pathname==='/api/auth/logout'&&req.method==='POST'){const token=cookies(req).ka_session;if(token){const sessions=readSessions();delete sessions[hashToken(token)];writeSessions(sessions)}clearCookie(res,'ka_session');return json(res,200,{ok:true})}
+    if(u.pathname==='/api/auth/logout'&&req.method==='POST'){if(!requireSameOrigin(req,res))return;const token=cookies(req).ka_session;if(token){const sessions=readSessions();delete sessions[hashToken(token)];writeSessions(sessions)}clearCookie(res,'ka_session');return json(res,200,{ok:true})}
     if(u.pathname==='/api/gmail/status'&&req.method==='GET'){const admin=requireSession(req,res);if(!admin)return;if(admin.role!=='admin')return json(res,403,{error:'admin_only'});const g=readState().gmail||{};return json(res,200,{connected:!!g.connected,email:g.email||''})}
     if(u.pathname==='/api/admin/session'&&req.method==='GET'){const s=requireSession(req,res);if(!s)return;if(s.role!=='admin')return json(res,403,{error:'admin_only'});return json(res,200,{ok:true,email:s.email,name:s.name})}
 
@@ -211,19 +255,25 @@ const server=http.createServer(async (req,res)=>{
     if(u.pathname==='/api/admin/gmail/messages'&&req.method==='GET'){const admin=requireSession(req,res);if(!admin)return;if(admin.role!=='admin')return json(res,403,{error:'admin_only'});const g=readState().gmail||{};if(!g.connected)return json(res,409,{error:'gmail_not_connected'});const access=await gmailAccessToken();const list=await httpsRequest(`https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=20&labelIds=INBOX`,'GET',null,{Authorization:`Bearer ${access}`});if(list.status!==200)return json(res,502,{error:'gmail_list_failed',detail:list.data});const msgs=[];for(const m of (list.data.messages||[]).slice(0,20)){const one=await httpsRequest(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`,'GET',null,{Authorization:`Bearer ${access}`});if(one.status===200){const headers=Object.fromEntries((one.data.payload?.headers||[]).map(h=>[h.name.toLowerCase(),h.value]));msgs.push({id:m.id,threadId:m.threadId,from:headers.from||'',to:headers.to||'',subject:headers.subject||'(sem assunto)',date:headers.date||'',snippet:one.data.snippet||''})}}return json(res,200,{email:g.email,messages:msgs})}
     if(u.pathname==='/api/state'&&req.method==='GET'){const s=readState();if(s.gmail&&s.gmail.refreshToken){s.gmail={connected:!!s.gmail.connected,email:s.gmail.email||'',connectedAt:s.gmail.connectedAt||''}}return json(res,200,s)}
     if(u.pathname==='/api/seller'&&req.method==='GET') return json(res,200,readState().seller||{name:'Keliton Ateliê',whatsapp:'',pixKey:'',pixUrl:''});
-    if(u.pathname==='/api/seller'&&req.method==='POST'){const body=JSON.parse((await readBody(req)).toString('utf8'));if(!body||typeof body.whatsapp!=='string')return json(res,400,{error:'seller'});const s=readState();s.seller={name:String(body.name||'Keliton Ateliê'),whatsapp:String(body.whatsapp),pixKey:String(body.pixKey||''),pixUrl:String(body.pixUrl||'')};writeState(s);return json(res,200,{ok:true,seller:s.seller})}
-    if(u.pathname==='/api/products'&&req.method==='POST'){const body=await readBody(req);const products=JSON.parse(body.toString('utf8'));if(!Array.isArray(products))return json(res,400,{error:'products must be an array'});const s=readState();s.products=products;writeState(s);return json(res,200,{ok:true})}
+    if(u.pathname==='/api/seller'&&req.method==='POST'){const admin=requireAdminPost(req,res);if(!admin)return;if(Number(req.headers['content-length']||0)>100_000)return json(res,413,{error:'payload_too_large'});const body=JSON.parse((await readBody(req)).toString('utf8'));if(!body||typeof body.whatsapp!=='string')return json(res,400,{error:'seller'});const s=readState();s.seller={name:String(body.name||'Keliton Ateliê'),whatsapp:String(body.whatsapp),pixKey:String(body.pixKey||''),pixUrl:String(body.pixUrl||'')};writeState(s);return json(res,200,{ok:true,seller:s.seller})}
+    if(u.pathname==='/api/products'&&req.method==='POST'){const admin=requireAdminPost(req,res);if(!admin)return;if(Number(req.headers['content-length']||0)>2_000_000)return json(res,413,{error:'payload_too_large'});const body=await readBody(req);const products=JSON.parse(body.toString('utf8'));if(!Array.isArray(products))return json(res,400,{error:'products must be an array'});const s=readState();s.products=products;writeState(s);return json(res,200,{ok:true})}
     if(u.pathname.startsWith('/api/music/')&&req.method==='POST'){
       const index=Number(u.pathname.split('/').pop()); if(!Number.isInteger(index)||index<0||index>5)return json(res,400,{error:'slot'});
-      const body=await readBody(req); if(!body.length)return json(res,400,{error:'empty'});
+      if(Number(req.headers['content-length']||0)>15_000_000)return json(res,413,{error:'music_too_large'});const body=await readBody(req); if(!body.length)return json(res,400,{error:'empty'});
       const name=safeName(decodeURIComponent(req.headers['x-filename']||`musica_${index}`));
       const ext=path.extname(name)||'.bin'; const stored=`slot_${index}_${crypto.randomBytes(5).toString('hex')}${ext}`;
       fs.writeFileSync(path.join(MUSIC_DIR,stored),body); const s=readState(); s.music[index]={name,url:`/music/${stored}`,remote:true}; writeState(s); return json(res,200,{ok:true,url:`/music/${stored}`,name});
     }
-    if(u.pathname==='/api/music/active'&&req.method==='POST'){const b=JSON.parse((await readBody(req)).toString('utf8'));const s=readState();s.active=Number.isInteger(b.active)?b.active:-1;writeState(s);return json(res,200,{ok:true})}
+    if(u.pathname==='/api/music/active'&&req.method==='POST'){const admin=requireAdminPost(req,res);if(!admin)return;const b=JSON.parse((await readBody(req)).toString('utf8'));const s=readState();s.active=Number.isInteger(b.active)?b.active:-1;writeState(s);return json(res,200,{ok:true})}
     if(u.pathname.startsWith('/music/')&&req.method==='GET'){const file=path.basename(u.pathname.slice('/music/'.length));const full=path.join(MUSIC_DIR,file);if(!fs.existsSync(full))return send(res,404,'text/plain','Not found');res.writeHead(200,{'Content-Type':mimeFor(path.extname(file)),'Cache-Control':'public,max-age=31536000'});return fs.createReadStream(full).pipe(res)}
-    let file=u.pathname==='/'?'/index.html':u.pathname; if(file.includes('..'))return send(res,400,'text/plain','Bad request');const full=path.join(ROOT,file);if(fs.existsSync(full)&&fs.statSync(full).isFile()){const ext=path.extname(full);const type=ext==='.html'?'text/html; charset=utf-8':ext==='.jpg'?'image/jpeg':ext==='.js'?'text/javascript; charset=utf-8':ext==='.png'?'image/png':'application/octet-stream';return send(res,200,type,fs.readFileSync(full))}
+    let file=u.pathname==='/'?'/index.html':u.pathname;
+     if(file.includes('..'))return send(res,400,'text/plain','Bad request');
+     const normalized=file.replace(/^\/+/, '');
+     const blocked=/^(?:server\.js|package\.json|Procfile|render\.yaml|\.env(?:\..*)?|\.git(?:\/|$)|data(?:\/.*|$)|node_modules(?:\/.*|$)|.*\.pem)$/i;
+     if(blocked.test(normalized))return send(res,404,'text/plain','Not found');
+     const full=path.join(ROOT,file);if(fs.existsSync(full)&&fs.statSync(full).isFile()){const ext=path.extname(full);const type=ext==='.html'?'text/html; charset=utf-8':ext==='.jpg'?'image/jpeg':ext==='.js'?'text/javascript; charset=utf-8':ext==='.png'?'image/png':'application/octet-stream';return send(res,200,type,fs.readFileSync(full))}
     send(res,404,'text/plain','Not found');
   }catch(e){console.error(e);json(res,500,{error:'server error',detail:process.env.NODE_ENV==='development'?String(e.message):undefined})}
 });
+try{assertProductionSecrets()}catch(e){console.error('SECURITY CONFIGURATION ERROR:',e.message);process.exit(1)}
 server.listen(PORT,'0.0.0.0',()=>console.log(`Keliton Atelie: http://localhost:${PORT}`));
