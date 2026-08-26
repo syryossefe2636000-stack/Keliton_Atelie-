@@ -1,0 +1,22 @@
+ATUALIZAÇÃO — ÁREA PIX + ENDEREÇO + DADOS DO CLIENTE
+
+Esta versão mantém a interface principal do Keliton Ateliê intacta.
+Foram acrescentados recursos somente no fluxo de finalização da compra:
+
+1. Nome completo do cliente.
+2. Número de telefone/WhatsApp.
+3. Endereço de entrega.
+4. Botão para usar a localização atual do aparelho.
+5. Link para abrir o endereço no Google Maps.
+6. Revisão do total antes do pagamento.
+7. Área PIX com chave PIX do fornecedor.
+8. Botão para copiar a chave PIX.
+9. Botão opcional para abrir o link da área PIX do fornecedor.
+10. Geração de comprovante do pedido após o cliente informar que pagou.
+11. Envio do pedido ao vendedor pelo WhatsApp.
+12. O comprovante deixa claro que a confirmação definitiva do pagamento depende da conferência do fornecedor.
+
+IMPORTANTE:
+- A chave PIX e o link da área PIX são cadastrados no Painel Admin > WhatsApp do vendedor / Dados de pagamento e contato.
+- O navegador precisa de permissão de localização para usar o botão “Usar minha localização”.
+- A atualização não altera a vitrine, cartões de produtos, menu, carrinho ou identidade visual principal.

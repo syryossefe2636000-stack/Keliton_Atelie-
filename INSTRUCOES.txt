@@ -1,0 +1,60 @@
+KELITON ATELIE — ATUALIZAÇÃO DE LOGIN E GMAIL
+
+O layout original foi preservado. Esta versão acrescenta o fluxo visual inspirado no guia:
+
+1) CLIENTE
+- Perfil -> Minha Conta.
+- Continuar com Google.
+- Continuar com Facebook.
+- A sessão é criada no servidor em cookie HttpOnly.
+- O site não recebe nem guarda a senha do Google/Facebook.
+
+2) ADMINISTRADOR
+- Painel Admin -> Google / Gmail.
+- Primeiro entre com a conta Google definida em ADMIN_EMAIL.
+- Depois autorize o acesso somente leitura à caixa de entrada do Gmail.
+- Painel Admin -> Mensagens do Gmail para carregar as mensagens recentes.
+- O refresh token do Gmail é armazenado cifrado com AES-256-GCM.
+
+CONFIGURAÇÃO OBRIGATÓRIA PARA LOGIN REAL
+
+Copie .env.example para .env e preencha:
+- PUBLIC_BASE_URL
+- GOOGLE_CLIENT_ID
+- GOOGLE_CLIENT_SECRET
+- FACEBOOK_APP_ID
+- FACEBOOK_APP_SECRET
+- ADMIN_EMAIL
+- ENCRYPTION_KEY_HEX
+
+GOOGLE CLOUD
+1. Crie um projeto no Google Cloud.
+2. Ative Gmail API.
+3. Configure a tela de consentimento OAuth.
+4. Crie um OAuth Client ID do tipo Web application.
+5. Cadastre como redirect URI:
+   https://SEU-DOMINIO/auth/google/callback
+6. Para o login de clientes, o escopo é OpenID/e-mail/perfil.
+7. Para o Gmail do administrador, o app solicita gmail.readonly.
+
+FACEBOOK
+1. Crie um app no Meta for Developers.
+2. Ative Facebook Login.
+3. Cadastre:
+   https://SEU-DOMINIO/auth/facebook/callback
+4. Preencha FACEBOOK_APP_ID e FACEBOOK_APP_SECRET.
+
+SEGURANÇA
+- Não coloque client secrets, refresh tokens ou a chave AES no index.html.
+- Não publique o arquivo .env.
+- Use HTTPS em produção.
+- O endpoint público /api/state não devolve o refresh token do Gmail.
+- Sessões do cliente são armazenadas no servidor somente como hashes de token.
+
+EXECUÇÃO
+node server.js
+
+Depois abra o endereço configurado em PUBLIC_BASE_URL.
+
+OBSERVAÇÃO
+Sem as credenciais OAuth reais do Google/Facebook, os botões aparecem e o fluxo está preparado, mas a autenticação externa não poderá ser concluída. As credenciais devem ser criadas pelo proprietário das respectivas contas/aplicativos.

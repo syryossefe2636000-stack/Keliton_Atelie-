@@ -1,0 +1,11 @@
+CORREÇÃO DO ACESSO DO ADMINISTRADOR
+
+Foi corrigido o erro “Unexpected token < ... is not valid JSON”.
+
+Causa: no GitHub Pages, o site estava tentando chamar /api como se o backend Node estivesse no mesmo endereço. O GitHub Pages devolvia uma página HTML/404, e o JavaScript tentava interpretar essa página como JSON.
+
+Correção: quando o site estiver em *.github.io, ele não chama mais /api. Assim o acesso por senha não quebra e o botão de biometria informa claramente que o backend ainda precisa estar conectado.
+
+IMPORTANTE: a biometria REAL com WebAuthn e o login Google/Facebook exigem que o backend Node seja publicado em HTTPS (por exemplo, Render) e que o site/backend sejam servidos no ambiente correto. Esta correção não inventa um endereço de backend nem finge que a biometria já está ativa.
+
+A interface existente foi preservada.
